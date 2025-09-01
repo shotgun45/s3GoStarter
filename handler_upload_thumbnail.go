@@ -1,10 +1,11 @@
 package main
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -52,13 +53,39 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	mediaType := fileHeader.Header.Get("Content-Type")
 	fmt.Println("Thumbnail media type:", mediaType)
 
-	// Read all image data into a byte slice
-	imageData, err := io.ReadAll(file)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Error reading image data", err)
+	// Determine file extension from media type
+	var fileExt string
+	switch mediaType {
+	case "image/jpeg":
+		fileExt = "jpg"
+	case "image/png":
+		fileExt = "png"
+	case "image/gif":
+		fileExt = "gif"
+	default:
+		respondWithError(w, http.StatusBadRequest, "Unsupported image type", nil)
 		return
 	}
-	fmt.Printf("Read %d bytes of image data\n", len(imageData))
+
+	// Create file path
+	fileName := fmt.Sprintf("%s.%s", videoID.String(), fileExt)
+	filePath := filepath.Join(cfg.assetsRoot, fileName)
+
+	// Save the file to disk
+	outFile, err := os.Create(filePath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error creating file", err)
+		return
+	}
+	defer outFile.Close()
+
+	// Copy the contents from the multipart.File to the new file
+	_, err = io.Copy(outFile, file)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error saving file", err)
+		return
+	}
+	fmt.Printf("Saved thumbnail to %s\n", filePath)
 
 	// Get the video's metadata from the database
 	video, err := cfg.db.GetVideo(videoID)
@@ -77,10 +104,9 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Create a data URL with the media type and base64 encoded image data
-	base64Thumb := base64.StdEncoding.EncodeToString(imageData)
-	dataURL := fmt.Sprintf("data:%s;base64,%s", mediaType, base64Thumb)
-	video.ThumbnailURL = &dataURL
+	// Update the video metadata with the new thumbnail file URL (full URL)
+	thumbnailURL := fmt.Sprintf("http://localhost:%s/assets/%s", cfg.port, fileName)
+	video.ThumbnailURL = &thumbnailURL
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error updating video metadata", err)
