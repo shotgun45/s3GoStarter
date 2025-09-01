@@ -7,6 +7,15 @@ import (
 	"github.com/google/uuid"
 )
 
+// Thumbnail represents the thumbnail data and its media type.
+type Thumbnail struct {
+	data      []byte
+	mediaType string
+}
+
+// videoThumbnails maps video UUIDs to their thumbnails.
+var videoThumbnails map[uuid.UUID]Thumbnail
+
 func (cfg *apiConfig) handlerThumbnailGet(w http.ResponseWriter, r *http.Request) {
 	videoIDString := r.PathValue("videoID")
 	videoID, err := uuid.Parse(videoIDString)
