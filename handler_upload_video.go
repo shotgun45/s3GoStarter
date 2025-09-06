@@ -86,6 +86,32 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Save the uploaded file to a temporary file on disk
+	var tempFile *os.File
+	tempFile, err = os.CreateTemp("", "tubely-upload-*.mp4")
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error creating temp file", err)
+		return
+	}
+	defer func() {
+		tempFile.Close()
+		os.Remove(tempFile.Name())
+	}()
+
+	// Copy the contents from the uploaded file to the temp file
+	_, err = io.Copy(tempFile, file)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error saving to temp file", err)
+		return
+	}
+
+	// Reset the tempFile's file pointer to the beginning
+	_, err = tempFile.Seek(0, io.SeekStart)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error seeking temp file", err)
+		return
+	}
+
 	// Generate a random file name for S3
 	randBytes := make([]byte, 32)
 	_, err = rand.Read(randBytes)
@@ -95,13 +121,36 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 	randStr := base64.RawURLEncoding.EncodeToString(randBytes)
 	fileExt := "mp4"
-	s3Key := fmt.Sprintf("%s.%s", randStr, fileExt)
+
+	// Get aspect ratio from temp file
+	aspect, err := getVideoAspectRatio(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error getting aspect ratio", err)
+		return
+	}
+	var prefix string
+	switch aspect {
+	case "16:9":
+		prefix = "landscape"
+	case "9:16":
+		prefix = "portrait"
+	default:
+		prefix = "other"
+	}
+	s3Key := fmt.Sprintf("%s/%s.%s", prefix, randStr, fileExt)
+
+	// Reset the tempFile's file pointer to the beginning before upload
+	_, err = tempFile.Seek(0, io.SeekStart)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error seeking temp file before S3 upload", err)
+		return
+	}
 
 	// Upload to S3
 	putInput := &s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
 		Key:         &s3Key,
-		Body:        file,
+		Body:        tempFile,
 		ContentType: &mediaType,
 	}
 	_, err = cfg.s3Client.PutObject(context.Background(), putInput)
@@ -111,7 +160,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Save the uploaded file to a temporary file on disk
-	tempFile, err := os.CreateTemp("", "tubely-upload-*.mp4")
+	tempFile, err = os.CreateTemp("", "tubely-upload-*.mp4")
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error creating temp file", err)
 		return

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -134,4 +137,38 @@ func main() {
 
 	log.Printf("Serving on: http://localhost:%s/app/\n", port)
 	log.Fatal(srv.ListenAndServe())
+}
+
+type ffprobeStreams struct {
+	Streams []struct {
+		Width  int `json:"width"`
+		Height int `json:"height"`
+	} `json:"streams"`
+}
+
+func getVideoAspectRatio(filePath string) (string, error) {
+	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+
+	var probe ffprobeStreams
+	if err := json.Unmarshal(out.Bytes(), &probe); err != nil {
+		return "", err
+	}
+	if len(probe.Streams) == 0 || probe.Streams[0].Width == 0 || probe.Streams[0].Height == 0 {
+		return "other", nil
+	}
+	w := probe.Streams[0].Width
+	h := probe.Streams[0].Height
+	ratio := float64(w) / float64(h)
+	if ratio > 1.7 && ratio < 1.8 {
+		return "16:9", nil
+	}
+	if ratio < 0.6 {
+		return "9:16", nil
+	}
+	return "other", nil
 }
