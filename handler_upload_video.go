@@ -139,18 +139,29 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 	s3Key := fmt.Sprintf("%s/%s.%s", prefix, randStr, fileExt)
 
-	// Reset the tempFile's file pointer to the beginning before upload
-	_, err = tempFile.Seek(0, io.SeekStart)
+	// Process the temp video file for fast start
+	processedPath, err := processVideoForFastStart(tempFile.Name())
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Error seeking temp file before S3 upload", err)
+		respondWithError(w, http.StatusInternalServerError, "Error processing video for fast start", err)
 		return
 	}
 
-	// Upload to S3
+	// Open the processed file for upload
+	processedFile, err := os.Open(processedPath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error opening processed video file", err)
+		return
+	}
+	defer func() {
+		processedFile.Close()
+		os.Remove(processedPath)
+	}()
+
+	// Upload the processed file to S3
 	putInput := &s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
 		Key:         &s3Key,
-		Body:        tempFile,
+		Body:        processedFile,
 		ContentType: &mediaType,
 	}
 	_, err = cfg.s3Client.PutObject(context.Background(), putInput)
